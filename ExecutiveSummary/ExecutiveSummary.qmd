@@ -1,0 +1,392 @@
+---
+title: "Análisis de ventas BigMart"
+author: "Carlos Pérez Manzano"
+lang: es
+format: 
+  html:
+    toc: true
+    embed-resources: true
+  pdf:
+    toc: true
+    include-in-header: 
+      text: |
+        \usepackage{fvextra}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}         
+    include-before-body:
+      text: |
+        \RecustomVerbatimEnvironment{verbatim}{Verbatim}{
+          showspaces = false,
+          showtabs = false,
+          breaksymbolleft={},
+          breaklines
+          % Note: setting commandchars=\\\{\} here will cause an error 
+        }                   
+    
+editor: source
+execute: 
+  error: true
+---
+
+## Resumen ejecutivo
+
+### Introducción
+
+En este proyecto vamos a realizar un análisis gráfico de un problema de ventas. Contamos con un dataset de 14204 observaciones y 12 variables que recogen las ventas de 1559 productos en 10 establecimientos de la empresa BigMart en el año 2013. Se puede encontrar el conjunto de datos en [https://zenodo.org/records/6509955](https://zenodo.org/records/6509955).
+
+Descripción de las variables:
+
+* **Item_Identifier**: variable cualitativa nominal indicando el código del artículo.
+
+* **Item_Weight**: variable numérica indicando el peso del artículo. No se nos informa la unidad de medida en la que se han recogido los datos.
+
+* **Item_Fat_Content**: variable cualitativa ordinal indicando el nivel de grasa del artículo. Los posibles valores son `Low Fat`, `Regular`, `low fat`, `LF`, `reg`.
+
+* **Item_Visibility**: valor numérico que indica cómo de visible es un artículo.
+
+* **Item_Type**: variable categórica indicando el tipo de producto: `Dairy`, `Soft Drinks`, `Meat`, `Fruits and Vegetables`, `Household`, `Baking Goods`, `Snack Foods`, `Frozen Foods`, `Breakfast`, `Health and Hygiene`, `Hard Drinks`, `Canned`, `Breads`, `Starchy Foods`, `Others`, `Seafood`.
+
+* **Item_MRP**: variable numérica indicando el MRP (Maximum Retail Price) del producto. 
+
+* **Outlet_Identifier**: variable categórica que contiene el identificador del establecimiento.
+
+* **Outlet_Establishment_Year**: variable cuantitativa discreta indicando el año de inauguración del establecimiento.
+
+* **Outlet_Size**: variable cualtitativa ordinal que muestra el tamaño del establecimiento. Toma los valores `Medium` , `High` y `Small`.
+
+* **Outlet_Location_Type**: variable categórica para indicar la localización del establecimiento: `Tier 1`, `Tier 2`, `Tier 3`.
+
+* **Outlet_Type**: variable categórica que indica el tipo de establecimiento: `Supermarket Type1`, `Supermarket Type2`, `Supermarket Type3`, `Grocery Store`.
+
+* **Item_Outlet_Sales**: variable cuantitativa discreta que indica el número de productos vendidos. 
+
+
+El objetivo es realizar un análisis exploratorio gráfico para comprender las propiedades de los productos y los establecimientos que pueden desempeñar un papel clave en el aumento de las ventas.
+
+
+### Preprocesamiento de datos
+
+El preprocesamiento de los datos de origen ha consistido en hacer frente a los tres problemas siguientes:
+
+1. Inconsistencia de las categorías de la variable `Item_Fat_Content`, pues tanto `Low Fat`, `low fat` y `LF` como `Regular` y `reg` representan la misma categoría respectivamente. Se han renombrado los niveles tomando solo dos: `Low Fat` y `Regular`.
+
+2. Valores nulos en las variables `Item_Weight` y `Outlet_Size`.
+
+3. Datos erróneos en la variable `Item_Visibility`, pues existen artículos con visibilidad igual a 0 con ventas.
+
+Para el problema de los valores nulos, observemos la siguiente gráfica para los valores nulos de `Item_Weight`. 
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+library(naniar)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+
+data = read.csv("data.csv")
+data <- data %>%
+  mutate(Item_Fat_Content = recode(Item_Fat_Content,
+                                   "low fat" = "Low Fat",
+                                   "LF" = "Low Fat",
+                                   "Regular" = "Regular",
+                                   "reg" = "Regular"))
+
+data <- data %>%
+  mutate(Outlet_Size = ifelse(!Outlet_Size %in% c("Medium", "High", "Small"), NA, Outlet_Size))
+
+gg_miss_var(data[,c(2,7)], facet = Outlet_Identifier, show_pct = TRUE) +
+  theme(axis.title.y = element_blank()) +
+  scale_fill_manual(values = c("#1f77b4"))
+```
+
+
+Vemos como los establecimientos OUT019 y OUT027 no han informado del peso del producto en ningún caso, mientras que los demás sí lo han hecho en todos ellos. Sin embargo, los productos cuyo peso no han sido informados son también vendidos por otros establecimientos. Por tanto, se imputan los valores nulos extrayendo el peso real de los productos del resto de establecimientos.
+
+Para la variable `Outlet_Size` ocurre algo similar, pues en este caso OUT010, OUT017 y OUT045 no han proporcionado este dato. Se han imputado los valores nulos mediante mediante una predicción de manera exploratoria del tamaño de los establecimientos en función del número de ventas totales de estos. 
+
+En cuanto al tercer problema, se han imputado los valores de `Item_Visibility` que son 0 por la media de la visibilidad de los productos del mismo tipo.
+
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#Variable Item_Weight
+data <- data %>%
+  group_by(Item_Identifier) %>%
+  mutate(Item_Weight = coalesce(Item_Weight, first(Item_Weight[!is.na(Item_Weight)]))) %>%
+  ungroup()
+
+#Variable Outlet_Size
+data <- data %>%
+  mutate(Outlet_Size = ifelse(Outlet_Identifier == "OUT010", "Small", Outlet_Size))
+
+data <- data %>% 
+  mutate(Outlet_Size = ifelse(Outlet_Identifier %in% c("OUT017","OUT045"), "Medium", Outlet_Size))
+
+#Variable Item_Visibility
+data <- data %>%
+  group_by(Item_Type) %>%
+  mutate(Item_Visibility = ifelse(Item_Visibility == 0, 
+                                  mean(Item_Visibility[Item_Visibility > 0]), Item_Visibility)) %>%
+  ungroup()
+
+
+items = data %>% group_by(Item_Identifier) %>% 
+  summarise(Item_Weight = first(Item_Weight),
+            Item_Fat_Content = first(Item_Fat_Content),
+            Item_Visibility = mean(Item_Visibility),
+            Item_Type = first(Item_Type),
+            Item_MRP = mean(Item_MRP),
+            Item_Sales = sum(Item_Outlet_Sales)) %>% 
+  arrange(desc(Item_Sales))
+
+outlets = data %>% group_by(Outlet_Identifier) %>% 
+  summarise(Outlet_Establishment_Year = first(Outlet_Establishment_Year),
+            Outlet_Size = first(Outlet_Size),
+            Outlet_Location_Type = first(Outlet_Location_Type),
+            Outlet_Type = first(Outlet_Type),
+            Outlet_Sales = sum(Item_Outlet_Sales),
+            Outlet_Items = n()) %>% 
+  arrange(desc(Outlet_Sales))
+```
+
+
+### Análisis gráfico
+
+#### Análisis univariante 
+
+En primer lugar se ha procedido a el estudio univariante de los datos. Destaquemos algunos de estos análisis.
+
+Mostramos la estimación de la densidad de la variable `Outlet_Item_Sales`, en la que podemos ver la distribución del número de ventas de cada producto en los distintos establecimientos.
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE, fig.width = 4, fig.height = 2.5}
+ggplot(data, aes(Item_Outlet_Sales)) + 
+  geom_density(fill = "#1f77b4", alpha = 0.6, color = NA) +
+  ylab("") + 
+  scale_y_continuous(NULL, breaks = NULL) + 
+  theme_void() +  # Elimina el fondo y los grids
+  theme(axis.text = element_text(color = "black"),  
+        axis.title = element_text(color = "black"),
+        plot.title = element_text(hjust = 0.5)) +  
+  labs(title =  "Distribución del número de ventas",
+       x = "Ventas")
+```
+
+Observamos una distribución similar a una de grado en ley de potencia. El número de ventas de los productos en los establecimientos suele ser parecido, mientras que hay ciertos productos que tienen un número de ventas mucho mayor, o más bien productos que logran un mayor número de ventas en ciertos establecimientos.
+
+Las proporciones del contenido en grasa de los productos es la siguiente:
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE,fig.width = 4, fig.height = 2.5}
+fatContent = data %>% group_by(Item_Identifier) %>% summarise(fc = first(Item_Fat_Content))
+
+df = as.data.frame(table(fatContent$fc))
+colnames(df) <- c("categoria", "frecuencia")
+
+df$porcentaje <- round(100 * df$frecuencia / sum(df$frecuencia), 1)
+
+ggplot(df, aes(x = "", y = frecuencia, fill = categoria)) +
+  geom_bar(stat = "identity", width = 1) +      
+  coord_polar("y", start = 0) +                 
+  theme_void() + 
+  geom_text(aes(label = paste0(porcentaje, "%")), position = position_stack(vjust = 0.5)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(fill = "Nivel de Grasa", title = "Contenido en grasa")
+```
+
+
+Vemos como hay un mayor número de productos con un bajo nivel de grasa.
+
+En cuanto a los tipos de producto:
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+itemType <- data %>% group_by(Item_Identifier) %>% summarise(it = first(Item_Type))
+df <- as.data.frame(table(itemType$it))
+colnames(df) <- c("categoria", "frecuencia")
+df$porcentaje <- round(100 * df$frecuencia / sum(df$frecuencia), 1)
+
+ggplot(df, aes(x = reorder(categoria, -frecuencia), y = frecuencia)) +
+  geom_col(fill = "#1f77b4") +
+  geom_text(aes(label = paste0(porcentaje, "%")), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(x = "Categoría", y = "", title = "Tipo de Producto") +
+  scale_y_continuous(NULL, breaks = NULL, expand = c(0, 25)) +
+  theme(axis.text.x = element_text(angle = 59, hjust = 1),
+        plot.title = element_text(hjust = 0.5))
+```
+
+Los vegetales y los snacks son los tipos de comida con un mayor porcentaje de presencia entre los productos. En contraposición, los productos de desayuno y marisco están menos presentes.
+
+Para las variables referentes a los establecimientos destacamos `Outlet_Type`.
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE,fig.width = 4, fig.height = 2.5}
+outletType = data %>% group_by(Outlet_Identifier) %>% summarise(et = first(Outlet_Type))
+
+df = as.data.frame(table(outletType$et))
+colnames(df) <- c("categoria", "frecuencia")
+
+df$porcentaje <- round(100 * df$frecuencia / sum(df$frecuencia), 1)
+
+ggplot(df, aes(x = "", y = frecuencia, fill = categoria)) +
+  geom_bar(stat = "identity", width = 1) +      
+  coord_polar("y", start = 0) +                 
+  theme_void() + 
+   geom_text(aes(label = paste0(porcentaje, "%")), position = position_stack(vjust = 0.5)) +
+  labs(fill = "Tipo de Establecimiento", title = "Tipos de Establecimiento") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+El tipo más común es el supermercado tipo 1. Por otro lado, los tipos `Grocery Store` (tienda de comestibles) y `SuperMarket Type3` representan cada uno un 10% del total. Teniendo en cuenta que contamos con un total de 10 tiendas, quiere decir que solo tenemos un establecimiento de cada uno de esos tipos.
+
+## Relación entre variables
+
+Puesto que lo que se pretende es detectar ciertos factores que influyen en el número de ventas, vamos a realizar una serie de gráficas que permitan notar las relaciones que esconden los datos.
+
+Antes hemos visto las diferencias entre las ventas de los productos en los establecimientos. Un posible motivo sería que un mismo producto tiene un gran número de ventas en un establecimiento y en otras pocas debido al renombre del establecimiento y no es muy dependiente al producto. Para descartar esa posibilidad, veamos cómo se distribuyen las ventas de los productos en la totalidad de los establecimientos.
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE, fig.width = 4, fig.height = 2.3}
+ggplot(items, aes(Item_Sales, forcats::fct_reorder(Item_Identifier, Item_Sales))) +
+  geom_col(fill = "#1f77b4") +
+  theme(axis.text.y = element_blank()) + 
+  labs(x = "Ventas Totales" ,
+       y = "Producto",
+       title = "Ventas Totales por Producto")
+```
+
+Queda claro que el motivo de la diferencia de las ventas de los distintos productos no depende únicamente del establecimiento, sino también del producto en sí. Esto es algo a tener en cuenta para el stock, pues es razonable tener una oferta de productos según la demanda de ellos.
+
+Siguiendo con las características de los productos, veamos cómo se relacionan la visibilidad y las ventas.
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE,fig.width = 4, fig.height = 2.3}
+ggplot(items, aes(x = Item_Visibility, y = Item_Sales)) + 
+  geom_point(color = "#1f77b4") + 
+  labs(x = "Visibilidad", y = "Ventas",
+       title = "Visibilidad vs Ventas") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Observamos como los productos con un mayor número de ventas no tienen una gran visibilidad, mientras que hay artículos con una mayor visibilidad que no necesariamente tienen un gran número de ventas. 
+Esto se puede deber a que algunos de los productos que consiguen un mayor número de ventas se corresponden con productos con una gran demanda o necesidad, tanta que provoca que no sea necesario darles gran visibilidad. Por otro lado, se intenta potenciar a los productos que tienen un menor número de ventas (quizás por una baja demanda) dándoles mayor visibilidad.
+
+Veamos ahora cómo afecta el MRP (Precio máximo de venta al público) del producto en las ventas, en función también del contenido en grasa de estos.
+
+```{r, warning=FALSE, message = FALSE, echo = FALSE,fig.width = 5, fig.height = 3}
+ggplot(items, aes(x = Item_MRP, y = Item_Sales, color = factor(Item_Fat_Content))) + 
+  geom_point(size = 1.3, alpha = 0.5) + 
+  geom_smooth(method = "lm",se = FALSE) + 
+  labs(x = "Precio", y = "Ventas",
+       title = "Precio vs Ventas", 
+       color = "Contenido en grasa") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+De este gráfico podemos sacar aparentemente las siguientes conclusiones:
+
+* Contamos con una clara relación lineal entre las ventas y el MRP Las ventas son sustancialmente mayores conforme el MRP de los productos aumenta. Notamos también como la fluctuación de las ventas es mayor a medida que se va aumentado el MRP del producto. El primero de los hechos se puede deber a muchos factores: una mayor calidad de los productos más caros, marcas más relevantes, más atractivos, productos que inicalmente eran más baratos pero tienen una clientela fiel que no renuncia a la compra pese a las subidas de precio, etc. En cuanto a lo segundo, puede deberse a que una subida repentina de los precios desenvoque en una baja considerable de potenciales clientes.
+
+* No hay una relación clara aparente de los contenidos en grasa de los productos con los precios o las ventas de los productos.
+
+
+Pasemos ahora a considerar alguna gráfica que muestre la relación de las ventas con los establecimientos. De la que podemos sacar un mayor número de conclusiones es la siguiente.
+
+```{r, warning=FALSE, message = FALSE, echo = FALSE}
+df <- outlets %>%
+  group_by(Outlet_Identifier, Outlet_Type) %>%
+  summarise(ventas = sum(Outlet_Sales), .groups = "drop") %>%
+  mutate(porcentaje = ventas / sum(ventas) * 100)
+
+ggplot(df, aes(x = reorder(Outlet_Identifier, -ventas), y = ventas, fill = Outlet_Type)) +
+  geom_col() +
+  geom_text(aes(label = sprintf("%.1f%%", porcentaje), 
+                y = ventas + max(ventas) * 0.04), size = 2.5, fontface = "bold") +
+  theme_minimal() +
+  labs(x = "Establecimiento", y = "Ventas", title = "Ventas según tipo") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 6))
+```
+
+Destacamos en primer lugar el establecimiento OUT027 pues es con una gran diferencia el que realiza un mayor número de ventas, siendo estas un 18.8% del total. Los establecimientos OUT010 y OUT19 son los que menos realizan, siendo un 1% las ventas del total para cada una de ellas.
+
+Observamos también una clara relación entre el tipo de supermercado y las ventas. Los establecimientos con menos ventas son tiendas de comestibles, lo que hace lógico ese número de ventas. El OUT027 es el único `SuperMarket Type3`. Obviando los costes de la constitución de este tipo de establecimientos pues no la conocemos, parece bastante razonable considerar la instauración de nuevos establecimientos de este tipo o la remodelación de los existentes. 
+
+
+Por último, sabiendo que OUT027 es que tiene mejores resultados, podemos tomar este como ejemplo a seguir para el resto de establecimientos. Una posible estrategia es potenciar en el resto de tiendas los artículos que más éxito tienen en OUT027 si estos no obtienen muchas ventas. Para ello, vamos a obtener los 2 ítems con un mayor número de ventas en OUT027 y vamos a ver qué posición ocupan en el ránking de ventas del resto de establecimientos. 
+
+```{r, warning=FALSE, message = FALSE, echo = FALSE}
+df = data %>% filter (Outlet_Identifier == "OUT027") %>% 
+            group_by(Outlet_Identifier, Item_Identifier) %>% 
+            summarise(Item_Sales = sum(Item_Outlet_Sales), .groups = "drop") %>% 
+            arrange(desc(Item_Sales)) %>% 
+            slice_head(n = 5)  %>% 
+            select(Item_Identifier, Item_Sales)
+
+products=df$Item_Identifier[1:2]
+
+ggplot(df, aes(x = reorder(Item_Identifier, -Item_Sales), y = Item_Sales)) + 
+  geom_col(fill = "#1f77b4") +
+  theme_minimal() +
+  labs(title = "Productos con más ventas", subtitle = "Establecimiento OUT027",
+       x = "Productos", y = "Ventas" ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+
+
+```
+
+Vemos como los ítems NCE42 y FDQ19 son los que más vendidos en el establecimiento OUT027.
+
+```{r, warning=FALSE, message = FALSE, echo = FALSE}
+products = data %>% filter (Outlet_Identifier == "OUT027") %>% 
+            group_by(Outlet_Identifier, Item_Identifier) %>% 
+            summarise(Item_Sales = sum(Item_Outlet_Sales), .groups = "drop") %>% 
+            arrange(desc(Item_Sales)) %>% 
+            slice_head(n = 2)  %>% 
+            select(Item_Identifier)
+products= as.vector(products)[[1]]
+
+df = data %>% 
+  filter(Outlet_Identifier != "OUT027") %>% 
+  group_by(Outlet_Identifier, Item_Identifier) %>% 
+  summarise(Item_Sales = sum(Item_Outlet_Sales), .groups = "drop") %>% 
+  arrange(Outlet_Identifier, desc(Item_Sales)) %>% 
+  group_by(Outlet_Identifier) %>% 
+  mutate(Item_Outlet_Ranking = row_number()) %>%
+  ungroup() %>% 
+  filter(Item_Identifier %in% products) 
+
+p1 = ggplot(df %>% filter(Item_Identifier == "NCE42"), aes(Outlet_Identifier, Item_Outlet_Ranking)) +
+      geom_point(color = "#1f77b4") + 
+      labs(title = "Ventas de los productos más vendidos de OUT027",subtitle="NCE42",
+           x = "Establecimiento", y = "Posicion") + 
+      theme_minimal() +
+      theme(axis.title.x = element_blank(), axis.text.x = element_blank(),
+            plot.title = element_text(hjust = 0.5),
+            plot.subtitle =  element_text(hjust = 0.5)) +
+      scale_y_continuous(limits = c(0, 900))
+
+p2 = ggplot(df %>% filter(Item_Identifier == "FDQ19"), aes(Outlet_Identifier, Item_Outlet_Ranking)) +
+      geom_point(color = "#1f77b4") + 
+      labs(subtitle="FDQ19",
+           x = "Establecimiento", y = "Posicion") + 
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5) ) + 
+      scale_y_continuous(limits = c(0, 1250))
+
+
+grid.arrange(p1, p2, ncol = 1)
+```
+
+
+Hay establecimientos como el OUT019, OUT045 o OUT017 que deberían potenciar más la venta del producto NCE42, mientras que el OUT013 es el que más destaca en los problemas para vender el producto FDQ19.
+
+En estos establecimientos podríamos tomar decisiones de una mayor inversión en marketing, dar una mayor visibilidad o realizar promociones para crear clientes con necesidad de estos productos, pues es quizás una de las mayores razones de éxito del establecimiento OUT027.
+
+
+## Anexo
+
+El código completo y gráficas adicionales se puede encontrar en el siguiente enlace de [Github](https://github.com/carlosperman/BigMart-Sales/tree/main/CompleteCode)
+
+
+
+
+

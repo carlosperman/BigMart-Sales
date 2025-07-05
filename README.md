@@ -1,4 +1,4 @@
-#BigMart-Sales
+# BigMart-Sales
 En este proyecto vamos a realizar un análisis gráfico de un problema de ventas. Contamos con un dataset de 14204 observaciones y 12 variables que recogen las ventas de 1559 productos en 10 establecimientos de la empresa BigMart en el año 2013. Se puede encontrar el conjunto de datos en [https://zenodo.org/records/6509955](https://zenodo.org/records/6509955).
 
 Descripción de las variables:
